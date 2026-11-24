@@ -1,0 +1,70 @@
+# BLACK SKYNET VIP - 24/7 - MEXC USDT Perps - RSI 20/80 + EMA 20/50/200 + Golden/Death Cross - Lev 7x-27x
+import os, threading, time, requests, pandas as pd, ccxt
+from flask import Flask
+app = Flask(__name__)
+@app.route('/')
+def home(): return "Black Skynet VIP is running"
+def keep_alive():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+threading.Thread(target=keep_alive, daemon=True).start()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = "-1003502607416"
+TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage" if BOT_TOKEN else None
+exchange = ccxt.mexc({'options': {'defaultType': 'swap'}, 'enableRateLimit': True})
+SYMBOLS = ['BTC/USDT:USDT','ETH/USDT:USDT','SOL/USDT:USDT','XRP/USDT:USDT','DOGE/USDT:USDT','LINK/USDT:USDT','AVAX/USDT:USDT','SUI/USDT:USDT','NEAR/USDT:USDT','APT/USDT:USDT','ARB/USDT:USDT','PEPE/USDT:USDT']
+TIMEFRAME = '15m'
+def send_signal(text):
+    if not TELEGRAM_URL: return
+    try: requests.post(TELEGRAM_URL, data={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'HTML', 'disable_web_page_preview': True}, timeout=10)
+    except Exception as e: print("Telegram error:", e)
+def get_rsi(c, p=14):
+    d = c.diff(); g = d.where(d > 0, 0).rolling(p).mean(); l = -d.where(d < 0, 0).rolling(p).mean()
+    return 100 - (100 / (1 + g / l))
+def get_ema(c, p): return c.ewm(span=p, adjust=False).mean()
+def calc_lev(score, vol):
+    b = 7 + (score / 100) * 20
+    if vol > 70: b *= 0.6
+    elif vol > 50: b *= 0.8
+    return int(max(7, min(27, round(b))))
+def scan(s):
+    try:
+        o = exchange.fetch_ohlcv(s, TIMEFRAME, limit=250)
+        df = pd.DataFrame(o, columns=['ts','open','high','low','close','vol'])
+        df['rsi'] = get_rsi(df['close']); df['e20'] = get_ema(df['close'], 20); df['e50'] = get_ema(df['close'], 50); df['e200'] = get_ema(df['close'], 200)
+        last = df.iloc[-1]; prev = df.iloc[-2]; rsi = last['rsi']; price = last['close']
+        e20, e50, e200 = last['e20'], last['e50'], last['e200']
+        golden = (prev['e50'] <= prev['e200']) and (e50 > e200); death = (prev['e50'] >= prev['e200']) and (e50 < e200)
+        above = price > e20 and price > e50 and price > e200; below = price < e20 and price < e50 and price < e200
+        try: funding = exchange.fetch_funding_rate(s).get('fundingRate', 0) * 100
+        except: funding = 0
+        vol = min(100, (df['high'] - df['low']).tail(14).mean() / price * 100 * 10)
+        coin = s.split('/')[0]; score = 0; direction = None; reasons = []
+        if (rsi <= 30) and (above or golden):
+            direction = "LONG"; score += 30
+            if rsi <= 20: score += 20; reasons.append(f"RSI {rsi:.1f} (20 Oversold)")
+            else: score += 10; reasons.append(f"RSI {rsi:.1f} (30 Oversold)")
+            if golden: score += 25; reasons.append("Golden Cross")
+            if above: score += 15; reasons.append("Price > EMA 20/50/200")
+            if funding <= -0.05: score += 10; reasons.append(f"Funding {funding:.3f}% Neg")
+        if (rsi >= 70) and (below or death):
+            direction = "SHORT"; score += 30
+            if rsi >= 80: score += 20; reasons.append(f"RSI {rsi:.1f} (80 Overbought)")
+            else: score += 10; reasons.append(f"RSI {rsi:.1f} (70 Overbought)")
+            if death: score += 25; reasons.append("Death Cross")
+            if below: score += 15; reasons.append("Price < EMA 20/50/200")
+            if funding >= 0.05: score += 10; reasons.append(f"Funding {funding:.3f}% Pos")
+        if direction and score >= 60:
+            lev = calc_lev(score, vol)
+            if direction == "LONG": sl = price * 0.99; tp1 = price * 1.02; tp2 = price * 1.04; tp3 = price * 1.06; emoji = "🟢"
+            else: sl = price * 1.01; tp1 = price * 0.98; tp2 = price * 0.96; tp3 = price * 0.94; emoji = "🔴"
+            msg = f"{emoji} <b>BLACK SKYNET SIGNAL</b>\n<b>{coin}/USDT Perp - {direction}</b>\nEntry: ${price:,.4f}\nSL: ${sl:,.4f}\nTP1: ${tp1:,.4f} | TP2: ${tp2:,.4f} | TP3: ${tp3:,.4f}\nLeverage: <b>{lev}x</b>\nReason: {' | '.join(reasons)}\nRSI: {rsi:.1f} | EMA 20: ${e20:,.2f} | EMA 50: ${e50:,.2f} | EMA 200: ${e200:,.2f}\nFunding: {funding:.4f}% | Score: {score}/100\n⚠️ Use SL."
+            send_signal(msg)
+        else: print(f"No signal {coin} RSI {rsi:.1f} Score {score}")
+    except Exception as e: print(f"Error {s}: {e}")
+print("BLACK SKYNET BOT STARTED")
+send_signal("✅ <b>BLACK SKYNET BOT ONLINE</b>\nMEXC USDT Perps | RSI 20/80 + EMA 20/50/200 + Golden/Death Cross | Lev 7x-27x")
+while True:
+    try:
+        for sym in SYMBOLS: scan(sym); time.sleep(2)
+        print("Scan done, waiting 5 min"); time.sleep(300)
+    except Exception as e: print("Loop error:", e); time.sleep(60)
