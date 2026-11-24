@@ -1,4 +1,13 @@
-# BLACK SKYNET - Scanner + Signals BOT - 24/7
+import os, threading
+from flask import Flask
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "Black Skynet VIP is running"
+def keep_alive():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+threading.Thread(target=keep_alive, daemon=True).start()# BLACK SKYNET - Scanner + Signals BOT - 24/7
 # MEXC ALL USDT Perps | RSI 20/80 (30/70 alt) + EMA 20/50/200 + Golden/Death Cross + OI Flush + Funding
 # Leverage 7x - 27x
 
